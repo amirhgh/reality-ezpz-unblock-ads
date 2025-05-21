@@ -38,13 +38,14 @@ HEIGHT=30
 WIDTH=60
 CHOICE_HEIGHT=20
 
-image[xray]="teddysun/xray:1.8.4"
-image[sing-box]="gzxhwq/sing-box:1.8.14"
-image[nginx]="nginx:1.24.0"
-image[certbot]="certbot/certbot:v2.6.0"
-image[haproxy]="haproxy:2.8.0"
+image[xray]="teddysun/xray:25.5.16"
+image[sing-box]="gzxhwq/sing-box:1.11.11"
+image[nginx]="nginx:stable"
+image[certbot]="certbot/certbot:v4.0.0"
+image[haproxy]="haproxy:latest"
 image[python]="python:3.11-alpine"
-image[wgcf]="virb3/wgcf:2.2.18"
+image[wgcf]="virb3/wgcf:2.2.26"
+image[warp-cli]="warp-cli:plus"
 
 defaults[transport]=tcp
 defaults[domain]=www.google.com
@@ -64,6 +65,14 @@ defaults[server]=$(curl -fsSL --ipv4 https://cloudflare.com/cdn-cgi/trace | grep
 defaults[tgbot]=OFF
 defaults[tgbot_token]=""
 defaults[tgbot_admins]=""
+# defaults[socks]=OFF
+# defaults[socks_port]=1080
+# defaults[socks_version]=5
+# defaults[socks_server]=127.0.0.1
+# defaults[socks_username]=""
+# defaults[socks_password]=""
+defaults[warp-cli]="OFF"
+defaults[warp-cli_license]=""
 
 config_items=(
   "core"
@@ -88,6 +97,14 @@ config_items=(
   "tgbot"
   "tgbot_token"
   "tgbot_admins"
+  # "socks"
+  # "socks_port"
+  # "socks_version"
+  # "socks_server"
+  # "socks_username"
+  # "socks_password"
+  "warp-cli"
+  "warp-cli_license"
 )
 
 regex[domain]="^[a-zA-Z0-9]+([-.][a-zA-Z0-9]+)*\.[a-zA-Z]{2,}$"
@@ -125,6 +142,11 @@ function show_help {
   echo "      --enable-tgbot <true|false> Enable Telegram bot for user management"
   echo "      --tgbot-token <token> Token of Telegram bot"
   echo "      --tgbot-admins <telegram-username> Usernames of telegram bot admins (Comma separated list of usernames without leading '@')"
+  # echo "      --enable-socks <true|false> Enable or disable socks proxy"
+  # echo "      --socks-server <server> Socks server (default: ${defaults[socks_server]})"
+  # echo "      --socks-port <port>   Socks proxy port (default: ${defaults[socks_port]})"
+  echo "      --enable-warp-cli <true|false> Enable or disable warp-cli"
+  echo "      --warp-cli-license <warp-cli-license> Add Cloudflare warp+ license for warp-cli"
   echo "      --show-server-config  Print server configuration"
   echo "      --add-user <username> Add new user"
   echo "      --list-users          List all users"
@@ -139,7 +161,7 @@ function show_help {
 
 function parse_args {
   local opts
-  opts=$(getopt -o t:d:ruc:mh --long transport:,domain:,server:,regenerate,default,restart,uninstall,enable-safenet:,port:,warp-license:,enable-warp:,core:,security:,menu,show-server-config,add-user:,list-users,show-user:,delete-user:,backup,restore:,backup-password:,enable-tgbot:,tgbot-token:,tgbot-admins:,help -- "$@")
+  opts=$(getopt -o t:d:ruc:mh --long transport:,domain:,server:,regenerate,default,restart,uninstall,enable-safenet:,port:,warp-license:,enable-warp:,core:,security:,menu,show-server-config,add-user:,list-users,show-user:,delete-user:,backup,restore:,backup-password:,enable-tgbot:,tgbot-token:,tgbot-admins:,enable-warp-cli:,warp-cli_license:,help -- "$@")
   if [[ $? -ne 0 ]]; then
     return 1
   fi
@@ -290,6 +312,26 @@ function parse_args {
         if [[ ! ${args[tgbot_admins]} =~ ${regex[tgbot_admins]} || $tgbot_admins =~ .+_$ || $tgbot_admins =~ .+_,.+ ]]; then
           echo "Invalid Telegram Bot Admins Username: ${args[tgbot_admins]}\nThe usernames must separated by ',' without leading '@' character or any extra space."
          return 1
+        fi
+        shift 2
+        ;;
+      --enable-warp-cli)
+        case "$2" in
+          true|false)
+            $2 && args[warp-cli]=ON || args[warp-cli]=OFF
+            shift 2
+            ;;
+          *)
+            echo "Invalid warp-cli option: $2"
+            return 1
+            ;;
+        esac
+        ;;
+      --warp-cli-license)
+        args[warp-cli_license]="$2"
+        if ! [[ ${args[warp-cli_license]} =~ ${regex[warp_license]} ]]; then
+          echo "Invalid warp-cli license: ${args[warp-cli_license]}"
+          return 1
         fi
         shift 2
         ;;
@@ -559,6 +601,18 @@ function build_config {
     echo 'To enable Telegram bot, you have to give the list of authorized Telegram admins username with --tgbot-admins option.'
     exit 1
   fi
+  if [[ ${config[warp-cli]} == 'ON' && -z ${config[warp-cli_license]} ]]; then
+    echo 'To enable WARP+ for warp-cli, you have to give WARP+ license with --warp-cli-license option.'
+    exit 1
+  fi
+  if [[ ${config[warp-cli]} == 'ON' && ${config[warp]} == 'ON' ]]; then
+    echo 'To enable warp-cli, you have to disable WARP with --enable-warp=false option.'
+    exit 1
+  fi
+  if [[ ${config[warp]} == 'ON' && ${config[warp-cli]} == 'ON' ]]; then
+    echo 'To enable WARP+, you have to disable warp-cli with --enable-warp-cli=false option.'
+    exit 1
+  fi
   if [[ ${config[warp]} == 'ON' && -z ${config[warp_license]} ]]; then
     echo 'To enable WARP+, you have to give WARP+ license with --warp-license option.'
     exit 1
@@ -735,10 +789,9 @@ version: "3"
 networks:
   reality:
     driver: bridge
-    enable_ipv6: true
     ipam:
       config:
-      - subnet: fc11::1:0/112
+      - subnet: 172.16.0.0/16
 services:
   engine:
     image: ${image[${config[core]}]}
@@ -800,6 +853,29 @@ echo "
     - reality
     entrypoint: /bin/sh
     command: /startup.sh"
+fi)
+$(if [[ ${config[warp-cli]} == 'ON' ]]; then
+echo "
+  warp-cli:
+    image: ${image[warp-cli]}
+    restart: always
+    volumes:
+      - ./${path[warp-cli]#${config_path}/}:/var/lib/cloudflare-warp
+    device_cgroup_rules:
+      - 'c 10:200 rwm'
+    environment:
+      - WARP_SLEEP=2
+      - WARP_LICENSE_KEY=${config[warp-cli_license]}
+    cap_add:
+      - MKNOD
+      - AUDIT_WRITE
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    networks:
+      reality:
+        ipv4_address: 172.16.0.100"
 fi)
 EOF
 }
@@ -1047,6 +1123,15 @@ function generate_engine_config {
         "mtu": 1280
       },'
     fi
+    if [[ ${config[warp-cli]} == 'ON' ]]; then
+      warp_cli_object='{
+        "type": "socks",
+        "tag": "warp-cli",
+        "server": "172.16.0.100",
+        "server_port": 1080,
+        "version": "5",
+      },'
+    fi
     for user in "${!users[@]}"; do
       if [ -n "$users_object" ]; then
         users_object="${users_object},"$'\n'
@@ -1140,13 +1225,22 @@ function generate_engine_config {
       "tag": "internet"
     },
     $([[ ${config[warp]} == ON ]] && echo "${warp_object}" || true)
+    $([[ ${config[warp-cli]} == ON ]] && echo "${warp_cli_object}" || true)
     {
       "type": "block",
       "tag": "block"
     }
   ],
   "route": {
-    "final": "$([[ ${config[warp]} == ON ]] && echo "warp" || echo "internet")",
+    "final": "$(
+      if [[ ${config[warp-cli]} == ON ]]; then
+      echo "warp-cli"
+      elif [[ ${config[warp]} == ON ]]; then
+      echo "warp"
+      else
+      echo "internet"
+      fi
+    )",
     "rule_set": [
       {
         "tag": "block",
@@ -1191,7 +1285,7 @@ function generate_engine_config {
           "geoip-private",
           "geosite-private"
           $([[ ${config[safenet]} == ON ]] && echo ',"nsfw"' || true)
-          $([[ ${config[warp]} == OFF ]] && echo ',"bypass"')
+          $([[ ${config[warp]} == OFF && ${config[warp-cli]} == OFF ]] && echo ',"bypass"')
         ],
         "outbound": "block"
       },
@@ -1763,6 +1857,8 @@ function show_server_config {
   server_config=$server_config$'\n'"Safenet: ${config[safenet]}"
   server_config=$server_config$'\n'"WARP: ${config[warp]}"
   server_config=$server_config$'\n'"WARP License: ${config[warp_license]}"
+  server_config=$server_config$'\n'"WARP CLI: ${config[warp-cli]}"
+  server_config=$server_config$'\n'"WARP CLI License: ${config[warp-cli_license]}"
   server_config=$server_config$'\n'"Telegram Bot: ${config[tgbot]}"
   server_config=$server_config$'\n'"Telegram Bot Token: ${config[tgbot_token]}"
   server_config=$server_config$'\n'"Telegram Bot Admins: ${config[tgbot_admins]}"
@@ -1846,6 +1942,7 @@ function configuration_menu {
       "12" "Restore Defaults" \
       "13" "Create Backup" \
       "14" "Restore Backup" \
+      "15" "Warp CLI" \
       3>&1 1>&2 2>&3)
     if [[ $? -ne 0 ]]; then
       break
@@ -1892,6 +1989,9 @@ function configuration_menu {
         ;;
       14 )
         restore_backup_menu
+        ;;
+      15 )
+        config_warp_cli_menu
         ;;
     esac
   done
@@ -2107,6 +2207,55 @@ function config_safenet_menu {
   fi
   config[safenet]=$([[ $safenet == 'Enable' ]] && echo ON || echo OFF)
   update_config_file
+}
+
+function config_warp_cli_menu {
+  local warp_cli
+  local warp_cli_license
+  local error
+  local temp_file
+  local exit_code
+  local old_warp_cli=${config[warp-cli]}
+  local old_warp_cli_license=${config[warp-cli_license]}
+  while true; do
+    warp_cli=$(whiptail --clear --backtitle "$BACKTITLE" --title "WARP" \
+      --radiolist --noitem "Enable WARP-CLI:" $HEIGHT $WIDTH $CHOICE_HEIGHT \
+      "Enable" "$([[ "${config[warp-cli]}" == 'ON' ]] && echo 'on' || echo 'off')" \
+      "Disable" "$([[ "${config[warp-cli]}" == 'OFF' ]] && echo 'on' || echo 'off')" \
+      3>&1 1>&2 2>&3)
+    if [[ $? -ne 0 ]]; then
+      break
+    fi
+    if [[ $warp_cli == 'Disable' ]]; then
+      config[warp-cli]=OFF
+      update_config_file
+      return
+    fi
+    warp-cli_dockerbuild
+    update_config_file
+    if [[ $? -ne 0 ]]; then
+      message_box "WARP-CLI" "WARP-CLI docker build failed."
+      continue
+    fi
+    config[warp-cli]=ON
+    while true; do
+      warp_cli_license=$(whiptail --clear --backtitle "$BACKTITLE" --title "WARP+ License" \
+        --inputbox "Enter WARP+ License:" $HEIGHT $WIDTH "${config[warp-cli_license]}" \
+        3>&1 1>&2 2>&3)
+      if [[ $? -ne 0 ]]; then
+        break
+      fi
+      if [[ ! $warp_cli_license =~ ${regex[warp_license]} ]]; then
+        message_box "Invalid Input" "Invalid WARP+ License"
+        continue
+      fi
+      config[warp-cli_license]=${warp_cli_license}
+      update_config_file
+      return
+    done
+  done
+  config[warp-cli]=$old_warp_cli
+  config[warp-cli_license]=$old_warp_cli_license
 }
 
 function config_warp_menu {
@@ -2376,6 +2525,14 @@ function warp_api {
   echo "${response_body}"
 }
 
+function warp-cli_dockerbuild {
+  if [[ ! -d "${config_path}/warp-cli" ]]; then
+    mkdir -p "${config_path}/warp-cli"
+  fi
+  git clone https://github.com/amirhgh/warp-docker.git "${config_path}/warp-cli" 
+  docker build --no-cache -t "${image[warp-cli]}" "${config_path}/warp-cli" 
+}
+
 function warp_create_account {
   local response
   docker run --rm -it -v "${config_path}":/data "${image[wgcf]}" register --config /data/wgcf-account.toml --accept-tos
@@ -2496,6 +2653,7 @@ function generate_file_list {
   path[tgbot_script]="${config_path}/tgbot/tgbot.py"
   path[tgbot_dockerfile]="${config_path}/tgbot/Dockerfile"
   path[tgbot_compose]="${config_path}/tgbot/docker-compose.yml"
+  path[warp-cli]="${config_path}/warp-cli"
 
   service[config]='none'
   service[users]='none'
